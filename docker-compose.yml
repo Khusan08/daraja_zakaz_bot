@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  telegram-bot:
+    build: .
+    container_name: telegram-bot
+    restart: always
+    environment:
+      - BOT_TOKEN=8113479785:AAEUnC7EFtM4mupcMXfUKs2VhaNf5o-YTA8
+      - GROUP_ID=-1002499643279
+      - TOPIC_ID=3
+    volumes:
+      - .:/app

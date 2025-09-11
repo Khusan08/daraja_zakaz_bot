@@ -1,0 +1,20 @@
+# Python image
+FROM python:3.11-slim
+
+# Workdir
+WORKDIR /app
+
+# System packages
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Bot source
+COPY . .
+
+# Run bot
+CMD ["python", "telegram_order_bot.py"]
