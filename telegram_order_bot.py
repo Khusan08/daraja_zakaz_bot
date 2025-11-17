@@ -7,9 +7,9 @@ from telegram.ext import (
 from datetime import datetime, timedelta
 
 # --- Bot sozlamalari ---
-TOKEN = "8113479785:AAEUnC7EFtM4mupcMXfUKs2VhaNf5o-YTA8"  # Bu yerga o'zingizning tokeningizni yozing
-GROUP_ID = -1002499643279  # Guruh IDsi
-TOPIC_ID = 3  # Topic IDsi (zakazlar tushadigan forum topic)
+TOKEN = "8113479785:AAEUnC7EFtM4mupcMXfUKs2VhaNf5o-YTA8"
+GROUP_ID = -1002850022891  # Guruh IDsi
+TOPIC_ID = 52  # Topic IDsi (zakazlar tushadigan forum topic)
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -85,6 +85,14 @@ def date_selection_keyboard(start_date, days=7):
         d = start_date - timedelta(days=i)
         text = d.strftime("%Y-%m-%d")
         buttons.append([InlineKeyboardButton(text, callback_data=f"date_{text}")])
+    return InlineKeyboardMarkup(buttons)
+
+def month_selection_keyboard(year):
+    months = [f"{m:02d}" for m in range(1, 13)]
+    buttons = []
+    for m in months:
+        date = f"{year}-{m}"
+        buttons.append([InlineKeyboardButton(date, callback_data=f"month_{date}")])
     return InlineKeyboardMarkup(buttons)
 
 # --- /start ---
@@ -222,8 +230,58 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "report_month":
-        start_date = datetime.now()
-        await query.message.reply_text("📅 Sana tanlang:", reply_markup=date_selection_keyboard(start_date))
+        year = datetime.now().year
+        await query.message.reply_text("📅 Oyni tanlang:", reply_markup=month_selection_keyboard(year))
+        return
+
+    if data.startswith("month_"):
+        selected_month = data.replace("month_", "")  # masalan: 2025-09
+        year, month = map(int, selected_month.split("-"))
+        start_date = datetime(year, month, 1)
+
+        # Oydagi kunlar soni
+        if month == 12:
+            next_month = datetime(year + 1, 1, 1)
+        else:
+            next_month = datetime(year, month + 1, 1)
+        days_in_month = (next_month - start_date).days
+
+        buttons = []
+        for day in range(1, days_in_month + 1):
+            date_str = f"{year}-{month:02d}-{day:02d}"
+            buttons.append([InlineKeyboardButton(date_str, callback_data=f"date_{date_str}")])
+
+        # "Oy bo‘yicha umumiy statistika" tugmasi
+        buttons.append([InlineKeyboardButton(f"📊 {selected_month} umumiy statistika", callback_data=f"month_report_{selected_month}")])
+
+        await query.message.reply_text(f"📅 {selected_month} uchun sanani tanlang:", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data.startswith("month_report_"):
+        selected_month = data.replace("month_report_", "")  # masalan: 2025-09
+        orders = []
+        for date_str, daily_orders in orders_history.items():
+            if date_str.startswith(selected_month):
+                orders.extend(daily_orders)
+
+        if not orders:
+            await query.message.reply_text(f"{selected_month} oyida zakaz yo‘q.")
+            return
+
+        total_sum = sum(o["total"] for o in orders)
+        region_count = {}
+        book_count = {}
+        for o in orders:
+            region_count[o["region"]] = region_count.get(o["region"], 0) + 1
+            for book in o["books"]:
+                book_count[book] = book_count.get(book, 0) + 1
+
+        text = f"📆 {selected_month} oylik sotuvlar:\n💰 Jami summa: {total_sum} so‘m\n\nViloyat bo‘yicha:\n"
+        for r, c in region_count.items(): text += f"- {r}: {c} ta zakaz\n"
+        text += "\nKitob bo‘yicha:\n"
+        for b, c in book_count.items(): text += f"- {b}: {c} ta\n"
+
+        await query.message.reply_text(text)
         return
 
     if data.startswith("date_"):
@@ -242,70 +300,79 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         USERS[new_id] = "admin" if data == "role_admin" else "hodim"
         await query.message.reply_text(f"✅ {new_name} muvaffaqiyatli qo‘shildi: {new_id} → {USERS[new_id]}")
         context.user_data["step"] = None
+        return
 
-# --- Message handler ---
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- Matnli javoblar ---
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    text = update.message.text
     step = context.user_data.get("step")
 
-    # Sotuv bo‘limi
     if step == "name":
-        user_data_dict[user_id]["name"] = text
-        await update.message.reply_text("📱 Telefon raqamini kiriting (+998 bilan, 13 ta belgi):")
+        user_data_dict[user_id]["name"] = update.message.text
+        await update.message.reply_text("📞 Telefon raqamini kiriting (13 belgili, masalan: +998901234567):")
         context.user_data["step"] = "phone"
         return
+
     if step == "phone":
-        if not (text.startswith("+998") and text[1:].isdigit() and len(text) == 13):
-            await update.message.reply_text("❌ Telefon raqam xato!\nNamuna: +9989012345678 (13 ta belgi)")
+        phone = update.message.text
+        if not (phone.startswith("+998") and len(phone) == 13 and phone[1:].isdigit()):
+            await update.message.reply_text("❌ Noto‘g‘ri raqam. Iltimos, +998 bilan boshlanadigan 13 belgili raqam kiriting.")
             return
-        user_data_dict[user_id]["phone"] = text
+        user_data_dict[user_id]["phone"] = phone
         keyboard = make_keyboard(list(REGIONS.keys()))
-        await update.message.reply_text("Viloyatni tanlang:", reply_markup=keyboard)
+        await update.message.reply_text("📍 Viloyatni tanlang:", reply_markup=keyboard)
         context.user_data["step"] = "region"
         return
+
     if step == "total":
-        if not text.isdigit():
-            await update.message.reply_text("❌ Faqat raqam kiriting.")
-            return
-        user_data_dict[user_id]["total"] = int(text)
-        await update.message.reply_text("💵 Avans summasini kiriting (so‘m):")
-        context.user_data["step"] = "advance"
+        try:
+            total = int(update.message.text)
+            user_data_dict[user_id]["total"] = total
+            await update.message.reply_text("💵 Avans summasini kiriting:")
+            context.user_data["step"] = "advance"
+        except:
+            await update.message.reply_text("❌ Son kiritish kerak.")
         return
+
     if step == "advance":
-        if not text.isdigit():
-            await update.message.reply_text("❌ Faqat raqam kiriting.")
-            return
-        user_data_dict[user_id]["advance"] = int(text)
-        await update.message.reply_text("📝 Izoh yozing:")
-        context.user_data["step"] = "note"
+        try:
+            advance = int(update.message.text)
+            user_data_dict[user_id]["advance"] = advance
+            await update.message.reply_text("📝 Izoh kiriting:")
+            context.user_data["step"] = "note"
+        except:
+            await update.message.reply_text("❌ Son kiritish kerak.")
         return
+
     if step == "note":
-        user_data_dict[user_id]["note"] = text
-        await update.message.reply_text("✅ Zakazni tasdiqlash uchun pastdagi tugmani bosing:", reply_markup=confirm_keyboard())
+        user_data_dict[user_id]["note"] = update.message.text
+        await update.message.reply_text("✅ Hammasi to‘g‘rimi?", reply_markup=confirm_keyboard())
         context.user_data["step"] = "confirm"
         return
 
-    # --- AddUser qismi ---
     if step == "add_user_name":
-        context.user_data["new_user_name"] = text
-        await update.message.reply_text("🆔 Hodim ID sini kiriting:")
+        context.user_data["new_user_name"] = update.message.text
+        await update.message.reply_text("🆔 Foydalanuvchi Telegram ID sini kiriting:")
         context.user_data["step"] = "add_user_id"
         return
+
     if step == "add_user_id":
-        if not text.isdigit():
-            await update.message.reply_text("❌ Faqat ID raqam kiriting.")
-            return
-        context.user_data["new_user_id"] = int(text)
-        await update.message.reply_text("Rolni tanlang:", reply_markup=role_keyboard())
-        context.user_data["step"] = "add_user_role"
+        try:
+            new_id = int(update.message.text)
+            context.user_data["new_user_id"] = new_id
+            await update.message.reply_text("Rolni tanlang:", reply_markup=role_keyboard())
+            context.user_data["step"] = "add_user_role"
+        except:
+            await update.message.reply_text("❌ ID faqat son bo‘lishi kerak.")
         return
 
-# --- Run ---
-if __name__ == "__main__":
+# --- Main ---
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    print("🤖 Bot ishga tushdi...")
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.run_polling()
+
+if __name__ == "__main__":
+    main()
